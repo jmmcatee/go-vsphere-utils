@@ -3,32 +3,31 @@ package govsphereutils
 import (
 	"github.com/vmware/govmomi"
 	"github.com/vmware/govmomi/vim25/mo"
+	"github.com/vmware/govmomi/vim25/types"
 )
 
 type SearchFunction func(govmomi.Reference) bool
-
-func FindVMByName(c *govmomi.Client, name string) govmomi.VirtualMachine {
-
-}
 
 func RecursiveSearch(c *govmomi.Client, sf SearchFunction) (govmomi.Reference, error) {
 	// Take root vSphere folder and loop through each datacenter
 	children, err := c.RootFolder().Children(c)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Loop through all datacenters and recursively search their trees
 	for _, v := range children {
 		ref, err := recursion(c, v, sf)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		if ref != nil {
 			return ref, nil
 		}
 	}
+
+	return nil, nil
 }
 
 // recursion is meant to take a datacenter and recursively move down the tree
@@ -48,7 +47,7 @@ func recursion(c *govmomi.Client, ref govmomi.Reference, sf SearchFunction) (gov
 		}
 
 		// Walk the VM folder
-		found, err = recursion(c, dcFolders.VmFolder, sf)
+		found, err := recursion(c, dcFolders.VmFolder, sf)
 		if err != nil {
 			return nil, err
 		}
@@ -102,7 +101,7 @@ func recursion(c *govmomi.Client, ref govmomi.Reference, sf SearchFunction) (gov
 	case "StoragePod":
 		var sp mo.StoragePod
 		c.Properties(ref.Reference(), nil, &sp)
-		govmomi.StoragePod
+
 		for _, v := range sp.ChildEntity {
 			newRef := newReference(v)
 			found, err := recursion(c, newRef, sf)
@@ -141,49 +140,49 @@ func recursion(c *govmomi.Client, ref govmomi.Reference, sf SearchFunction) (gov
 				return found, nil
 			}
 		}
-	default:
-		return nil, nil
 	}
+
+	return nil, nil
 }
 
-func newReference(e types.ManagedObjectReference) Reference {
+func newReference(e types.ManagedObjectReference) govmomi.Reference {
 	switch e.Type {
 	case "Folder":
-		return &Folder{ManagedObjectReference: e}
+		return &govmomi.Folder{ManagedObjectReference: e}
 	case "StoragePod":
-		return &StoragePod{
-			Folder{ManagedObjectReference: e},
+		return &govmomi.StoragePod{
+			govmomi.Folder{ManagedObjectReference: e},
 		}
 	case "Datacenter":
-		return &Datacenter{ManagedObjectReference: e}
+		return &govmomi.Datacenter{ManagedObjectReference: e}
 	case "VirtualMachine":
-		return &VirtualMachine{ManagedObjectReference: e}
+		return &govmomi.VirtualMachine{ManagedObjectReference: e}
 	case "VirtualApp":
-		return &VirtualApp{
-			ResourcePool{ManagedObjectReference: e},
+		return &govmomi.VirtualApp{
+			govmomi.ResourcePool{ManagedObjectReference: e},
 		}
 	case "ComputeResource":
-		return &ComputeResource{ManagedObjectReference: e}
+		return &govmomi.ComputeResource{ManagedObjectReference: e}
 	case "ClusterComputeResource":
-		return &ClusterComputeResource{
-			ComputeResource{ManagedObjectReference: e},
+		return &govmomi.ClusterComputeResource{
+			govmomi.ComputeResource{ManagedObjectReference: e},
 		}
 	case "HostSystem":
-		return &HostSystem{ManagedObjectReference: e}
+		return &govmomi.HostSystem{ManagedObjectReference: e}
 	case "Network":
-		return &Network{ManagedObjectReference: e}
+		return &govmomi.Network{ManagedObjectReference: e}
 	case "ResourcePool":
-		return &ResourcePool{ManagedObjectReference: e}
+		return &govmomi.ResourcePool{ManagedObjectReference: e}
 	case "DistributedVirtualSwitch":
-		return &DistributedVirtualSwitch{ManagedObjectReference: e}
+		return &govmomi.DistributedVirtualSwitch{ManagedObjectReference: e}
 	case "VmwareDistributedVirtualSwitch":
-		return &VmwareDistributedVirtualSwitch{
-			DistributedVirtualSwitch{ManagedObjectReference: e},
+		return &govmomi.VmwareDistributedVirtualSwitch{
+			govmomi.DistributedVirtualSwitch{ManagedObjectReference: e},
 		}
 	case "DistributedVirtualPortgroup":
-		return &DistributedVirtualPortgroup{ManagedObjectReference: e}
+		return &govmomi.DistributedVirtualPortgroup{ManagedObjectReference: e}
 	case "Datastore":
-		return &Datastore{ManagedObjectReference: e}
+		return &govmomi.Datastore{ManagedObjectReference: e}
 	default:
 		panic("Unknown managed entity: " + e.Type)
 	}
