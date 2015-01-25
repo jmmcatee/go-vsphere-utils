@@ -6,188 +6,157 @@ import (
 	"github.com/vmware/govmomi/vim25/types"
 )
 
-type Searcher interface {
-	Compare(*govmomi.Client, govmomi.Reference) bool
-}
+func InventoryMap(c *govmomi.Client) (map[string][]govmomi.Reference, error) {
+	// map to return
+	m := map[string][]govmomi.Reference{}
 
-type nameSearcher struct {
-	Name string
-	Type string
-}
+	// Get the root Folder
+	root := c.RootFolder()
 
-func (v nameSearcher) Compare(c *govmomi.Client, ref govmomi.Reference) bool {
-	// Check for VM Type
-	if ref.Reference().Type != v.Type {
-		return false
-	}
-
-	switch ref.Reference().Type {
-	case "VirtualMachine":
-		// Check for name
-		var vm mo.VirtualMachine
-		c.Properties(ref.Reference(), nil, &vm)
-
-		if vm.Name == v.Name {
-			return true
-		}
-	case "HostSystem":
-		var h mo.HostSystem
-		c.Properties(ref.Reference(), nil, &h)
-		if h.Name == v.Name {
-			return true
-		}
-	}
-
-	return false
-}
-
-func FindVMByName(c *govmomi.Client, name string) (govmomi.Reference, error) {
-	s := nameSearcher{name, "VirtualMachine"}
-
-	return RecursiveSearch(c, s)
-}
-
-func FindHostByName(c *govmomi.Client, name string) (govmomi.Reference, error) {
-	s := nameSearcher{name, "HostSystem"}
-
-	return RecursiveSearch(c, s)
-}
-
-func RecursiveSearch(c *govmomi.Client, s Searcher) (govmomi.Reference, error) {
-	// Take root vSphere folder and loop through each datacenter
-	children, err := c.RootFolder().Children(c)
+	rootChildren, err := root.Children()
 	if err != nil {
 		return nil, err
 	}
 
-	// Loop through all datacenters and recursively search their trees
-	for _, v := range children {
-		ref, err := recursion(c, v, s)
+	// Loop through datacenters
+	for _, v := range rootChildren {
+		found, err := recursion(c, v)
 		if err != nil {
 			return nil, err
 		}
 
-		if ref != nil {
-			return ref, nil
+		// Append found to map
+		for t, v := range found {
+			m[t] = append(m[t], v...)
 		}
 	}
 
-	return nil, nil
+	return m, nil
 }
 
-// recursion is meant to take a datacenter and recursively move down the tree
-func recursion(c *govmomi.Client, ref govmomi.Reference, s Searcher) (govmomi.Reference, error) {
-	// First thing is to check if we have found our reference
-	if s.Compare(c, ref) {
-		return ref, nil
-	}
+func recursion(c *govmomi.Client, ref govmomi.Reference) (map[string][]govmomi.Reference, error) {
+	m := map[string][]govmomi.Reference{}
 
-	// We have not found our reference so keep moving down the tree
 	switch ref.Reference().Type {
+	default:
+		// We should have a reference with no children so just return it
+		m[ref.Reference().Type] = append(m[ref.Reference().Type], ref)
 	case "Datacenter":
-		dc := govmomi.NewDatacenter(ref.Reference())
-		dcFolders, err := dc.Folders(c)
+		dc := govmomi.NewDatacenter(c, ref.Reference())
+		dcFolders, err := dc.Folders()
 		if err != nil {
 			return nil, err
 		}
 
 		// Walk the VM folder
-		found, err := recursion(c, dcFolders.VmFolder, s)
+		vmFound, err := recursion(c, dcFolders.VmFolder)
 		if err != nil {
 			return nil, err
-		}
-		if found != nil {
-			return found, nil
 		}
 
 		// Walk the Host folder
-		found, err = recursion(c, dcFolders.HostFolder, s)
+		hFound, err := recursion(c, dcFolders.HostFolder)
 		if err != nil {
 			return nil, err
-		}
-		if found != nil {
-			return found, nil
 		}
 
 		// Walk the Datastore Folder
-		found, err = recursion(c, dcFolders.DatastoreFolder, s)
+		dFound, err := recursion(c, dcFolders.DatastoreFolder)
 		if err != nil {
 			return nil, err
-		}
-		if found != nil {
-			return found, nil
 		}
 
 		// walk the Network folder
-		found, err = recursion(c, dcFolders.NetworkFolder, s)
+		nFound, err := recursion(c, dcFolders.NetworkFolder)
 		if err != nil {
 			return nil, err
 		}
-		if found != nil {
-			return found, nil
+
+		// Add references to returned reference
+		for t, v := range vmFound {
+			m[t] = append(m[t], v...)
+		}
+
+		for t, v := range hFound {
+			m[t] = append(m[t], v...)
+		}
+
+		for t, v := range dFound {
+			m[t] = append(m[t], v...)
+		}
+
+		for t, v := range nFound {
+			m[t] = append(m[t], v...)
 		}
 
 	case "Folder":
-		folder := govmomi.NewFolder(ref.Reference())
-		children, err := folder.Children(c)
+		folder := govmomi.NewFolder(c, ref.Reference())
+		children, err := folder.Children()
 		if err != nil {
 			return nil, err
 		}
 
 		for _, v := range children {
-			found, err := recursion(c, v, s)
+			found, err := recursion(c, v)
 			if err != nil {
 				return nil, err
 			}
-			if found != nil {
-				return found, nil
+
+			for t, v := range found {
+				m[t] = append(m[t], v...)
 			}
 		}
+
 	case "StoragePod":
 		var sp mo.StoragePod
 		c.Properties(ref.Reference(), nil, &sp)
 
 		for _, v := range sp.ChildEntity {
 			newRef := newReference(v)
-			found, err := recursion(c, newRef, s)
+			found, err := recursion(c, newRef)
 			if err != nil {
 				return nil, err
 			}
-			if found != nil {
-				return found, nil
+
+			for t, v := range found {
+				m[t] = append(m[t], v...)
 			}
 		}
+
 	case "ClusterComputeResource", "ComputeResource":
 		var ccr mo.ClusterComputeResource
 		c.Properties(ref.Reference(), nil, &ccr)
 
 		for _, v := range ccr.Host {
 			newRef := newReference(v)
-			found, err := recursion(c, newRef, s)
+			found, err := recursion(c, newRef)
 			if err != nil {
 				return nil, err
 			}
-			if found != nil {
-				return found, nil
+
+			for t, v := range found {
+				m[t] = append(m[t], v...)
 			}
 		}
+
 	case "VmwareDistributedVirtualSwitch", "DistributedVirtualSwitch":
 		var vDVS mo.VmwareDistributedVirtualSwitch
 		c.Properties(ref.Reference(), nil, &vDVS)
 
 		for _, v := range vDVS.Portgroup {
 			newRef := newReference(v)
-			found, err := recursion(c, newRef, s)
+			found, err := recursion(c, newRef)
 			if err != nil {
 				return nil, err
 			}
-			if found != nil {
-				return found, nil
+
+			for t, v := range found {
+				m[t] = append(m[t], v...)
 			}
 		}
 	}
 
-	return nil, nil
+	return m, nil
 }
 
 func newReference(e types.ManagedObjectReference) govmomi.Reference {
@@ -196,7 +165,7 @@ func newReference(e types.ManagedObjectReference) govmomi.Reference {
 		return &govmomi.Folder{ManagedObjectReference: e}
 	case "StoragePod":
 		return &govmomi.StoragePod{
-			govmomi.Folder{ManagedObjectReference: e},
+			&govmomi.Folder{ManagedObjectReference: e},
 		}
 	case "Datacenter":
 		return &govmomi.Datacenter{ManagedObjectReference: e}
@@ -204,7 +173,7 @@ func newReference(e types.ManagedObjectReference) govmomi.Reference {
 		return &govmomi.VirtualMachine{ManagedObjectReference: e}
 	case "VirtualApp":
 		return &govmomi.VirtualApp{
-			govmomi.ResourcePool{ManagedObjectReference: e},
+			&govmomi.ResourcePool{ManagedObjectReference: e},
 		}
 	case "ComputeResource":
 		return &govmomi.ComputeResource{ManagedObjectReference: e}
